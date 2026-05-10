@@ -1,0 +1,513 @@
+module mux_2_1 #(parameter INPUT_SIZE = 4)(
+    i1,
+    i2,
+    select,
+    out
+);
+input [INPUT_SIZE-1: 0] i1;
+input [INPUT_SIZE-1: 0] i2;
+input select;
+output [INPUT_SIZE-1: 0] out;
+
+assign out = select ? i2 : i1;
+
+endmodule
+
+/// sub ///
+
+module sub #(parameter INPUT_SIZE = 4)(
+    a,
+    b,
+    out,
+    borrow
+);
+input [INPUT_SIZE-1: 0] a;
+input [INPUT_SIZE-1: 0] b;
+output [INPUT_SIZE-1: 0] out;
+output borrow;
+
+wire [INPUT_SIZE-1: 0]par_out;
+
+assign par_out = a-b;
+assign borrow = par_out[INPUT_SIZE-1];
+assign out = borrow ? -par_out : par_out;
+
+endmodule
+
+//// adder_sub ////
+
+module adder_sub_8_bit(
+    a,
+    b,
+    aexp,
+    bexp,
+    out,
+    condition,
+    exp,
+    exp_out
+);
+input [3:0] a;
+input [3:0] b;
+input [3:0]aexp,bexp;
+input [3:0] exp;
+input condition;
+output reg [3:0] out;
+output reg [3:0]exp_out;
+ reg carry;
+ integer i;
+
+
+always @(a,b) begin
+    if(condition) 
+	{carry,out}=a+b;
+    
+    else begin
+   if (a>b) {carry,out}=a-b;
+    else    {carry,out}=b-a;
+    end 
+     exp_out=exp;
+
+    if(condition) begin
+        out=out>>carry;
+        exp_out=exp+carry;
+    end
+    else begin
+      for(i=3;i>=0;i=i-1)
+        begin
+        if(out[3]!=1'b1)begin
+            out=out<<1'b1;
+            exp_out=exp_out-1'b1;
+            end
+        end
+      
+    end
+end
+
+endmodule
+
+///////////right_shift///////////////
+
+
+ module right_shift #(parameter INPUT_SIZE = 4,parameter SHIFT_SIZE = 1)(
+     in,
+     shift_amount,
+     out,
+     condition
+ );
+ input [INPUT_SIZE-1:0] in;
+ input [SHIFT_SIZE-1:0] shift_amount;
+ output [INPUT_SIZE-1:0] out;
+ input condition;
+ assign out =condition? in >>> shift_amount : in << shift_amount;
+
+ endmodule
+
+
+///////////////////prepend//////////////
+
+module prepend #(parameter INPUT_SIZE = 3)(
+    in,
+    out
+);
+input [INPUT_SIZE-1:0] in;
+output [INPUT_SIZE:0] out;
+
+assign out = {1'b1,in};
+
+endmodule
+
+///////////////////rshift///////////////
+
+module rshift(
+    input [4:-3] a,
+    input signed [3:0] shift_size,
+    output [4:-3] out
+);
+parameter EXP_SIZE = 4;
+parameter SIGN_BIT = 5; 
+parameter MANTISSA_SIZE = 3;
+
+wire [4:-3] pos_out;
+wire [4:-3] neg_out;
+wire [3:0] expsafe0;
+assign expsafe0 = (a[EXP_SIZE-1:0] - shift_size);
+wire check;
+assign check = expsafe0[3];
+wire [3:0] expsafe;
+assign expsafe = (check==1) ? 4'b0000 : expsafe0;
+assign pos_out = (a==8'd0) ? 8'd0 : ((shift_size < 1) ? {a[SIGN_BIT-1],(a[EXP_SIZE-1:0] + shift_size - 4'd2),a[-1:-MANTISSA_SIZE]} : {a[SIGN_BIT-1], expsafe,a[-1:-MANTISSA_SIZE]});
+
+fp_adder z1 (.mode(1'b0),.a(a),.b(pos_out),.out(neg_out));
+
+assign out = (a == 8'd0)    ? 8'd0   :
+             (shift_size == 0) ? a   :    
+             (shift_size < 1)  ? neg_out :
+                                 pos_out;
+endmodule
+
+
+
+
+
+//////////////fp_adder///////////////////
+
+module fp_adder(
+    a,
+    b,
+    out,
+    mode
+);
+parameter EXP_SIZE = 4;
+parameter SIGN_SIZE = 1; 
+parameter MANTISSA_SIZE = 3;
+parameter SIGN_BIT = 5;                             
+integer i;
+input [SIGN_SIZE + EXP_SIZE-1:-MANTISSA_SIZE] a;
+input [SIGN_SIZE + EXP_SIZE-1:-MANTISSA_SIZE] b;
+
+input mode;
+output [SIGN_SIZE + EXP_SIZE-1:-MANTISSA_SIZE] out;
+
+wire a_sign,b_sign,b_sign1,borrow,carry;
+wire [MANTISSA_SIZE-1:0] a_mantissa,b_mantissa,m1_out,m2_out,out_mantissa;
+wire [EXP_SIZE-1:0] a_exp,b_exp,sub_exp_out,m3_out,out_exp;
+wire [MANTISSA_SIZE:0] p1_out,r1_out,p2_out,r2_out,a1_out;
+wire outSignBit,condition;
+
+
+assign {a_sign,a_exp,a_mantissa} = a;
+assign {b_sign1,b_exp,b_mantissa} = b;
+assign b_sign = mode ? b_sign1 : (~b_sign1); 
+
+assign condition= (a_sign == b_sign) ? 1:0;
+
+
+sub #(.INPUT_SIZE(EXP_SIZE)) s1 (a_exp,b_exp,sub_exp_out,borrow);
+
+
+mux_2_1 #(.INPUT_SIZE(MANTISSA_SIZE)) m1 (b_mantissa,a_mantissa,borrow,m1_out);
+mux_2_1 #(.INPUT_SIZE(MANTISSA_SIZE)) m2 (a_mantissa,b_mantissa,borrow,m2_out);
+
+prepend #(.INPUT_SIZE(MANTISSA_SIZE)) p1 (m1_out,p1_out);
+right_shift  #(.INPUT_SIZE(MANTISSA_SIZE+1),.SHIFT_SIZE(EXP_SIZE)) r1 (p1_out,sub_exp_out,r1_out,1'b1);
+prepend #(.INPUT_SIZE(MANTISSA_SIZE)) p2 (m2_out,p2_out);
+
+wire [MANTISSA_SIZE:0] sub_man_out;
+wire man_borrow;
+
+mux_2_1 #(.INPUT_SIZE(EXP_SIZE)) m3 (a_exp,b_exp,borrow,m3_out);
+
+adder_sub_8_bit a1 (.a(r1_out),.b(p2_out),.out(a1_out),.aexp(a_exp),.bexp(b_exp),.condition(condition),.exp(m3_out),.exp_out(out_exp));
+
+assign out_mantissa = a1_out[MANTISSA_SIZE-1:0];
+
+
+assign outSignBit = ((a_exp>b_exp)||((a_exp==b_exp)&&(a_mantissa>=b_mantissa))) ? a_sign : b_sign;
+assign out = {outSignBit,out_exp[EXP_SIZE-1:0],out_mantissa[MANTISSA_SIZE-1:0]};
+
+endmodule
+
+////////////////////hypb////////////
+
+module cordic_bfloat_hypb_fp32(
+    input clk,
+    input EN,
+    input [4:-3] z,
+    input [7:0] x_init,   // ADD THIS
+    output reg [7:0] x_out,
+    output reg [7:0] y_out,
+    output done
+);
+
+    parameter EXP_SIZE = 4;
+    parameter SIGN_SIZE = 1; 
+    parameter MANTISSA_SIZE = 3;
+    parameter SIGN_BIT = 5;                          // 5 |     4 3 2 1 0   | -1 -2 -3 -4 -5 -6 -7 -8 -9 -10
+    parameter [7:0] THRESHOLD = 8'h00;                                                // S |   EXPONENT BIT  |        MANTISSA
+
+    reg signed [SIGN_SIZE + EXP_SIZE-1:-MANTISSA_SIZE] x_;
+    reg signed [SIGN_SIZE + EXP_SIZE-1:-MANTISSA_SIZE] y_;
+    reg signed [SIGN_SIZE + EXP_SIZE-1:-MANTISSA_SIZE] z_;
+    reg signed [7:0] i;
+    wire signed [SIGN_SIZE + EXP_SIZE-1:-MANTISSA_SIZE] Z_UPDATE;
+    // wire signed [SIGN_SIZE + EXP_SIZE-1:-MANTISSA_SIZE] shifted_out;
+    reg IS_FIRST4;
+    reg IS_FIRST13;
+reg converged;
+    wire [7:0] x_shift_out,y_shift_out,z_out,x_neg_out,x_pos_out,y_pos_out,y_neg_out;
+    wire [4:-3]mid_out;
+    wire z_small;
+assign z_small = (z_ == THRESHOLD);  // for now exact zero
+    atanh_LOOKUP_hypb LOOKUP(
+        .index(i),
+        .value(Z_UPDATE));
+       
+
+    fp_adder z1 (.mode(z_[SIGN_BIT-1]),.a(z_),.b(Z_UPDATE),.out(z_out));
+    rshift r11 (.a(x_),.shift_size(i),.out(x_shift_out));
+    rshift r12 (.a(y_),.shift_size(i),.out(y_shift_out));
+
+    wire [7:0] x_comb, y_comb;  // intermediate combinational wires
+
+fp_adder x1 (.mode(~z_[SIGN_BIT-1]),.a(x_),.b(y_shift_out),.out(x_comb));  // was x_out
+fp_adder y1 (.mode(~z_[SIGN_BIT-1]),.a(y_),.b(x_shift_out),.out(y_comb));  // was y_out
+fp_adder o  (.mode(1'b1),.a(x_comb),.b(y_comb),.out(mid_out));
+
+    assign done = converged;
+
+
+    
+
+always @(posedge clk)
+begin
+    if (EN)
+    begin
+        x_ <= x_init;
+        y_ <= 8'h00;
+        z_ <= z;
+        // In hyperbolic EN block:
+i <= (z[3:0] < 4'd6) ? (4'd6 - z[3:0]) : 4'd1;
+        converged <= 0;
+    end
+    else
+    begin
+        if (!converged)
+        begin
+            if (z_small || i == 7)
+begin
+    converged <= 1;
+    x_out <= x_;      // latch current stored value
+    y_out <= y_;
+end
+else
+begin
+    i <= i + 1;
+    x_ <= x_comb;     // use combinational wire, not x_out
+    y_ <= y_comb;
+    z_ <= z_out;
+end
+        end
+    end
+end
+endmodule
+
+
+
+////////////linear////////////////
+
+module cordic_bfloat_linearfp32(
+        input clk,
+        input EN,
+        input [4:-3] x,
+        input [4:-3] y,
+        output  reg [7:0] out,
+        output done
+);
+
+    parameter EXP_SIZE = 4;
+    parameter SIGN_SIZE = 1; 
+    parameter MANTISSA_SIZE = 3;
+    parameter SIGN_BIT = 5;                          
+    parameter [7:0] THRESHOLD = 8'h00;
+    reg signed [SIGN_SIZE + EXP_SIZE-1:-MANTISSA_SIZE] x_;
+    reg signed [SIGN_SIZE + EXP_SIZE-1:-MANTISSA_SIZE] y_;
+    reg signed [SIGN_SIZE + EXP_SIZE-1:-MANTISSA_SIZE] z_;
+    reg signed [7:0] i;
+    wire signed [SIGN_SIZE + EXP_SIZE-1:-MANTISSA_SIZE] Z_UPDATE;
+    reg IS_FIRST4;
+    reg IS_FIRST13;
+    reg converged;
+    wire [4:-3] mid_out;
+    wire [7:0] x_shift_out,y_shift_out,x_out,y_out,x_neg_out,x_pos_out,y_pos_out,y_neg_out;
+    wire [4:-3]z_out;
+wire y_small;
+assign y_small = (y_ == THRESHOLD);
+    atanh_LOOKUP_linear_8 LOOKUP(
+        .index(i),
+        .value(Z_UPDATE));
+
+    fp_adder z1 (.mode(~y_[SIGN_BIT-1]),.a(z_),.b(Z_UPDATE),.out(z_out));
+       rshift r11 (.a(x_),.shift_size(i),.out(x_shift_out));
+    fp_adder y1 (.mode(y_[SIGN_BIT-1]),.a(y_),.b(x_shift_out),.out(y_out));
+
+    
+    assign done = converged;
+
+always @(posedge clk)
+begin
+    if (EN)
+    // In EN block of linearfp32, instead of i <= 0:
+begin
+    x_ <= x;
+    y_ <= y;
+    z_ <= 8'h00;
+    converged <= 0;
+    // start i at exp_diff so first step ~= y magnitude
+    i <= (x[3:0] > y[3:0]) ? (x[3:0] - y[3:0]) : 4'd0;
+end
+    else
+    begin
+        if (!converged)
+        begin
+            if (y_small || i == 7)
+begin
+    converged <= 1;
+    out <= {z_[SIGN_BIT-1], z_[EXP_SIZE-1:0], z_[-1:-MANTISSA_SIZE]}; // latch from register
+end
+else
+begin
+    i <= i + 1;
+    x_ <= x_;
+    y_ <= y_out;
+    z_ <= z_out;
+end
+        end
+    end
+end
+endmodule
+
+////////////linear lookup table///////////////
+
+module atanh_LOOKUP_linear_8(index, value);
+    localparam EXP_SIZE = 4;
+    localparam SIGN_SIZE = 1;
+    localparam MANTISSA_SIZE = 3;
+
+    input wire signed [7:0] index;
+    output reg signed [SIGN_SIZE + EXP_SIZE-1:-MANTISSA_SIZE] value;
+
+    always @(index)
+    begin
+        case (index)
+            -4: value = 8'h38; // atanh(1 - 2^-6) ≈ 2.422 → 2.50
+            -3: value = 8'h37; // atanh(1 - 2^-5) ≈ 2.072 → 2.00
+
+            -2: value = 8'h37; // atanh(1 - 2^-4) ≈ 1.717 → 1.75
+            -1: value = 8'h36; // atanh(1 - 2^-3) ≈ 1.354 → 1.375
+             0: value = 8'h34; // atanh(1 - 2^-2) ≈ 0.973 → 1.00
+             1: value = 8'h30; // atanh(2^-1)     ≈ 0.549 → 0.5625
+             2: value = 8'h28; // atanh(2^-2)     ≈ 0.255 → 0.25
+             3: value = 8'h20; // atanh(2^-3)     ≈ 0.126 → 0.125
+
+             4: value = 8'h18; // atanh(2^-4)     ≈ 0.0626
+             5: value = 8'h10; // atanh(2^-5)     ≈ 0.03126
+             6: value = 8'h08; // atanh(2^-6)     ≈ 0.01563
+            default: value = 8'h00;
+        endcase
+
+        
+        
+        
+//             actual = 2.7706317725             
+//           actual = 2.4220935432            
+//                actual = 2.0715673631               
+//           actual = 1.7169936022                
+//                     actual = 1.35402510055           
+//                      actual = 0.972955074527              
+//                       actual = 0.5493061443               
+//                 actual = 0.2554128118                
+//                   actual = 0.1256572141                
+//                     actual = 0.062581571477             
+//             actual = 0.03126017849          
+//                      actual = 0.015626271752            
+//                       actual = 0.0078126589515            
+//                 actual = 0.0039062986839            
+//                        actual = 0.001953127483           
+//             0.000976562810441    
+//                      0.0004882812888   
+//                    0.0002441406298506   
+//          0.0001227070313106329 
+    end
+endmodule
+
+
+
+/////////////hypb lut///////////////
+module atanh_LOOKUP_hypb(index, value);
+    localparam EXP_SIZE = 4;
+    localparam SIGN_SIZE = 1;
+    localparam MANTISSA_SIZE = 3;
+
+    input wire signed [7:0] index;
+    output reg signed [SIGN_SIZE + EXP_SIZE-1:-MANTISSA_SIZE] value;
+
+    always @(index)
+    begin
+        case (index)
+            -4: value = 8'h42; // atanh(1 - 2^-6) ≈ 2.422 → 2.50
+            -3: value = 8'h40; // atanh(1 - 2^-5) ≈ 2.072 → 2.00
+
+            -2: value = 8'h3E; // atanh(1 - 2^-4) ≈ 1.717 → 1.75
+            -1: value = 8'h3B; // atanh(1 - 2^-3) ≈ 1.354 → 1.375
+             0: value = 8'h38; // atanh(1 - 2^-2) ≈ 0.973 → 1.00
+             1: value = 8'h31; // atanh(2^-1)     ≈ 0.549 → 0.5625
+             2: value = 8'h28; // atanh(2^-2)     ≈ 0.255 → 0.25
+             3: value = 8'h20; // atanh(2^-3)     ≈ 0.126 → 0.125
+
+             4: value = 8'h18; // atanh(2^-4)     ≈ 0.0626
+             5: value = 8'h10; // atanh(2^-5)     ≈ 0.03126
+             6: value = 8'h08; // atanh(2^-6)     ≈ 0.01563
+            default: value = 8'h00;
+        endcase
+
+        
+        
+        
+//             actual = 2.7706317725             
+//           actual = 2.4220935432            
+//                actual = 2.0715673631               
+//           actual = 1.7169936022                
+//                     actual = 1.35402510055           
+//                      actual = 0.972955074527              
+//                       actual = 0.5493061443               
+//                 actual = 0.2554128118                
+//                   actual = 0.1256572141                
+//                     actual = 0.062581571477             
+//             actual = 0.03126017849          
+//                      actual = 0.015626271752            
+//                       actual = 0.0078126589515            
+//                 actual = 0.0039062986839            
+//                        actual = 0.001953127483           
+//             0.000976562810441    
+//                      0.0004882812888   
+//                    0.0002441406298506   
+//          0.0001227070313106329 
+    end
+endmodule
+
+
+////////////////////top module////////////////////
+
+module tanh_fp8_asic(
+    input clk,
+    input EN,
+    input [4:-3] z,
+    input [7:0] x_init,   // ADD THIS
+    output [7:0] tanh_out
+);
+wire [7:0] x,y;
+wire done;
+wire tanh_done;
+// In tanh_fp8_asic, pass z directly if exp==0 (denormal ~ 0)
+wire z_denormal = (z[3:0] == 4'b0000);  // correct - exp bits are [3:0] // exp bits of z
+// route to output directly if denormal, skip cordic
+cordic_bfloat_hypb_fp32 t1(
+    .clk(clk),
+    .EN(EN),
+    .z(z),
+    .x_init(x_init),   
+    .x_out(x),
+    .y_out(y),
+    .done(done)
+);
+ reg q;
+ wire lin_enable = done ? done & !q : lin_enable;
+always@(posedge clk)begin
+    if(EN) q<= 1'd0;
+    else
+    q <= done;
+end
+wire [7:0] cordic_out;  
+cordic_bfloat_linearfp32 t2(.clk(clk),.EN(lin_enable),.x(x),.y(y),.done(tanh_done),.out(cordic_out));
+assign tanh_out = z_denormal ? {z[4], z[3:0], z[-1:-3]} : cordic_out;
+endmodule
