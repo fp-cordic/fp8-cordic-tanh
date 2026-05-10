@@ -1,0 +1,178 @@
+`timescale 1ns/1ps
+
+module tb_compare_refined;
+
+    reg clk;
+    reg EN;
+
+    reg [7:0] z;
+    reg [7:0] x_init;
+
+    wire [7:0] tanh_out;
+
+    // DUT
+    tanh_fp8_asic DUT (
+        .clk(clk),
+        .EN(EN),
+        .z(z),
+        .x_init(x_init),
+        .tanh_out(tanh_out)
+    );
+
+    // CLOCK
+    initial begin
+        clk = 0;
+        forever #5 clk = ~clk;
+    end
+
+
+    // IDEAL FUNCTION 
+
+    function [7:0] get_ideal;
+        input [7:0] zval;
+        begin
+            if (zval[7]) begin
+                get_ideal = get_ideal({1'b0, zval[6:0]});
+                get_ideal = {1'b1, get_ideal[6:0]};
+            end
+            else begin
+                if (zval <= 8'h2B) get_ideal = zval;
+                else if (zval == 8'h2C) get_ideal = 8'h2B;
+                else if (zval == 8'h2D) get_ideal = 8'h2C;
+                else if (zval == 8'h2E) get_ideal = 8'h2D;
+                else if (zval == 8'h2F) get_ideal = 8'h2E;
+                else if (zval == 8'h30) get_ideal = 8'h2F;
+                else if (zval == 8'h31) get_ideal = 8'h30;
+                else if (zval == 8'h32) get_ideal = 8'h31;
+                else if (zval == 8'h33) get_ideal = 8'h32;
+                else if (zval == 8'h34) get_ideal = 8'h32;
+                else if (zval == 8'h35) get_ideal = 8'h33;
+                else if (zval == 8'h36) get_ideal = 8'h33;
+                else if (zval == 8'h37) get_ideal = 8'h34;
+                else if (zval == 8'h38) get_ideal = 8'h34;
+                else get_ideal = 8'h38;
+            end
+        end
+    endfunction
+
+    // REFINED LUT 
+
+    function [7:0] lut_x_init;
+        input [7:0] zval;
+        reg sign;
+        reg [6:0] mag;
+        begin
+            sign = zval[7];
+            mag  = sign ? (~zval[6:0] + 1'b1) : zval[6:0];
+
+            if (mag >= 7'h28 && mag <= 7'h38)
+                lut_x_init = 8'h30;
+            else if (mag >= 7'h10 && mag < 7'h28)
+                lut_x_init = 8'h38;
+            else
+                lut_x_init = 8'h3F;
+        end
+    endfunction
+
+
+    // PIPELINE WAIT
+
+    task wait_pipeline;
+        integer i;
+        begin
+            for (i = 0; i < 25; i = i + 1)
+                @(posedge clk);
+        end
+    endtask
+
+    integer zi;
+
+    reg [7:0] ideal;
+    reg [7:0] out_fixed;
+    reg [7:0] out_lut;
+
+    integer err_fixed;
+    integer err_lut;
+
+    integer total_fixed;
+    integer total_lut;
+
+    initial begin
+
+        EN = 0;
+        z  = 0;
+        x_init = 0;
+
+        total_fixed = 0;
+        total_lut   = 0;
+
+        #20;
+
+        $display("z  ideal  fixed  lut    err_f  err_l");
+
+        for (zi = 0; zi < 256; zi = zi + 1) begin
+
+            z = zi[7:0];
+            ideal = get_ideal(z);
+
+            // FIXED (0x38)
+
+            @(negedge clk);
+            x_init = 8'h38;
+            EN = 1;
+
+            @(negedge clk);
+            EN = 0;
+
+            wait_pipeline();
+
+            out_fixed = tanh_out;
+
+            err_fixed = (out_fixed > ideal) ? (out_fixed - ideal)
+                                           : (ideal - out_fixed);
+
+            total_fixed = total_fixed + err_fixed;
+
+  
+            // REFINED LUT
+
+            @(negedge clk);
+            x_init = lut_x_init(z);
+            EN = 1;
+
+            @(negedge clk);
+            EN = 0;
+
+            wait_pipeline();
+
+            out_lut = tanh_out;
+
+            err_lut = (out_lut > ideal) ? (out_lut - ideal)
+                                       : (ideal - out_lut);
+
+            total_lut = total_lut + err_lut;
+
+            // PRINT ALL
+            $display("%02h  %02h    %02h     %02h     %0d      %0d",
+                     z, ideal, out_fixed, out_lut, err_fixed, err_lut);
+
+            // HIGHLIGHT WORSE CASES
+            if (err_lut > err_fixed + 5)
+                $display("BIG ERROR INCREASE at z=%02h  (fixed=%0d, lut=%0d)",
+                          z, err_fixed, err_lut);
+
+        end
+
+  
+        // FINAL RESULT
+
+        $display("\n===============================");
+        $display("TOTAL ERROR (FIXED 0x38) : %0d", total_fixed);
+        $display("TOTAL ERROR (REFINED LUT): %0d", total_lut);
+        $display("IMPROVEMENT              : %0d", total_fixed - total_lut);
+        $display("===============================\n");
+
+        $finish;
+    end
+
+endmodule
